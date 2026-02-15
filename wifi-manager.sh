@@ -3,8 +3,10 @@
 # Fuzzy finder detection
 if command -v fuzzel &>/dev/null; then
   LAUNCHER="fuzzel --dmenu --width=60"
+  LAUNCHER_TYPE="fuzzel"
 elif command -v rofi &>/dev/null; then
   LAUNCHER="rofi -dmenu -i"
+  LAUNCHER_TYPE="rofi"
 else
   echo "❌ Error: fuzzel or rofi not found"
   exit 1
@@ -25,6 +27,21 @@ notify() {
   if command -v notify-send &>/dev/null; then
     notify-send -u "$urgency" "$title" "$message"
   fi
+}
+
+# Get password input
+get_password() {
+  local prompt="$1"
+  local password=""
+
+  if [ "$LAUNCHER_TYPE" = "rofi" ]; then
+    password=$(rofi -dmenu -i -password -p "$prompt")
+  else
+    # For fuzzel, use regular input (no built-in password masking)
+    password=$(fuzzel --dmenu --width=60 -p "$prompt")
+  fi
+
+  echo "$password"
 }
 
 # Get WiFi status
@@ -152,7 +169,7 @@ connect_wifi() {
 
   if echo "$security" | grep -q "WPA\|WEP"; then
     # Ask for password
-    password=$(echo "" | $LAUNCHER -p "Password for $ssid" --password)
+    password=$(get_password "Password for $ssid")
 
     if [ -z "$password" ]; then
       notify "❌ Cancelled" "Connection cancelled" "low"
@@ -164,7 +181,7 @@ connect_wifi() {
     if nmcli device wifi connect "$ssid" password "$password" 2>/dev/null; then
       notify "✅ Connected" "Connected to $ssid" "normal"
     else
-      notify "❌ Failed" "Failed to connect to $ssid" "critical"
+      notify "❌ Failed" "Failed to connect to $ssid. Check password and try again." "critical"
     fi
   else
     # Open network
@@ -180,7 +197,7 @@ connect_wifi() {
 
 # Connect to hidden network
 connect_hidden_network() {
-  ssid=$(echo "" | $LAUNCHER -p "Enter hidden network SSID")
+  ssid=$($LAUNCHER -p "Enter hidden network SSID")
 
   if [ -z "$ssid" ]; then
     return
@@ -190,18 +207,24 @@ connect_hidden_network() {
 
   case "$security" in
   "WPA/WPA2")
-    password=$(echo "" | $LAUNCHER -p "Password for $ssid" --password)
+    password=$(get_password "Password for $ssid")
 
     if [ -n "$password" ]; then
       notify "📡 Connecting" "Connecting to hidden network..." "normal"
-      nmcli device wifi connect "$ssid" password "$password" hidden yes
-      notify "✅ Connected" "Connected to $ssid" "normal"
+      if nmcli device wifi connect "$ssid" password "$password" hidden yes 2>/dev/null; then
+        notify "✅ Connected" "Connected to $ssid" "normal"
+      else
+        notify "❌ Failed" "Failed to connect to $ssid" "critical"
+      fi
     fi
     ;;
   "None (Open)")
     notify "📡 Connecting" "Connecting to hidden network..." "normal"
-    nmcli device wifi connect "$ssid" hidden yes
-    notify "✅ Connected" "Connected to $ssid" "normal"
+    if nmcli device wifi connect "$ssid" hidden yes 2>/dev/null; then
+      notify "✅ Connected" "Connected to $ssid" "normal"
+    else
+      notify "❌ Failed" "Failed to connect to $ssid" "critical"
+    fi
     ;;
   *)
     notify "❌ Cancelled" "Connection cancelled" "low"
@@ -381,14 +404,14 @@ set_static_ip() {
     return
   fi
 
-  ip_addr=$(echo "" | $LAUNCHER -p "Enter IP address (e.g., 192.168.1.100/24)")
+  ip_addr=$($LAUNCHER -p "Enter IP address (e.g., 192.168.1.100/24)")
 
   if [ -z "$ip_addr" ]; then
     return
   fi
 
-  gateway=$(echo "" | $LAUNCHER -p "Enter gateway (e.g., 192.168.1.1)")
-  dns=$(echo "" | $LAUNCHER -p "Enter DNS (e.g., 8.8.8.8)")
+  gateway=$($LAUNCHER -p "Enter gateway (e.g., 192.168.1.1)")
+  dns=$($LAUNCHER -p "Enter DNS (e.g., 8.8.8.8)")
 
   if [ -n "$ip_addr" ] && [ -n "$gateway" ]; then
     nmcli connection modify "$active_conn" ipv4.method manual ipv4.addresses "$ip_addr" ipv4.gateway "$gateway"
@@ -439,7 +462,7 @@ manage_dns() {
     notify "✅ DNS Updated" "Using Quad9 DNS" "normal"
     ;;
   "📝 Custom DNS")
-    custom_dns=$(echo "" | $LAUNCHER -p "Enter DNS servers (space separated)")
+    custom_dns=$($LAUNCHER -p "Enter DNS servers (space separated)")
     if [ -n "$custom_dns" ]; then
       nmcli connection modify "$active_conn" ipv4.dns "$custom_dns"
       nmcli connection down "$active_conn" && nmcli connection up "$active_conn"
@@ -549,13 +572,13 @@ manage_hotspot() {
 
   case "$choice" in
   "🔥 Create Hotspot")
-    ssid=$(echo "" | $LAUNCHER -p "Enter hotspot name (SSID)")
+    ssid=$($LAUNCHER -p "Enter hotspot name (SSID)")
 
     if [ -z "$ssid" ]; then
       return
     fi
 
-    password=$(echo "" | $LAUNCHER -p "Enter password (min 8 chars)" --password)
+    password=$(get_password "Enter password (min 8 chars)")
 
     if [ -z "$password" ]; then
       return
@@ -604,7 +627,7 @@ network_diagnostics() {
       echo "$result" | $LAUNCHER -p "Ping Results"
       ;;
     "Custom")
-      custom=$(echo "" | $LAUNCHER -p "Enter host to ping")
+      custom=$($LAUNCHER -p "Enter host to ping")
       if [ -n "$custom" ]; then
         result=$(ping -c 4 "$custom" 2>&1)
         echo "$result" | $LAUNCHER -p "Ping Results"
@@ -626,7 +649,7 @@ network_diagnostics() {
     fi
     ;;
   "🔍 Trace Route")
-    host=$(echo "" | $LAUNCHER -p "Enter host for traceroute")
+    host=$($LAUNCHER -p "Enter host for traceroute")
     if [ -n "$host" ]; then
       notify "🔍 Tracing" "Running traceroute..." "normal"
       result=$(traceroute "$host" 2>&1)

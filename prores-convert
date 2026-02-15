@@ -1,0 +1,175 @@
+#!/bin/bash
+# Simple ProRes Video Converter
+# Usage: ./prores-convert <video_file> [quality]
+# Quality options: hq (default), standard, lt, proxy, 4444
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Show usage
+show_usage() {
+    echo "ProRes Video Converter"
+    echo ""
+    echo "Usage: $0 <video_file> [quality]"
+    echo ""
+    echo "Quality options:"
+    echo "  hq       - ProRes 422 HQ (default, highest quality)"
+    echo "  standard - ProRes 422 (good quality, smaller file)"
+    echo "  lt       - ProRes 422 LT (lower quality, small file)"
+    echo "  proxy    - ProRes 422 Proxy (lowest quality, smallest file)"
+    echo "  4444     - ProRes 4444 (supports alpha channel)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 myvideo.mp4"
+    echo "  $0 myvideo.mp4 hq"
+    echo "  $0 '/path/to/my video [2024].mp4' standard"
+    echo ""
+}
+
+# Check if file provided
+if [ $# -eq 0 ]; then
+    show_usage
+    exit 1
+fi
+
+# Check for help flag
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    show_usage
+    exit 0
+fi
+
+# Check if ffmpeg is installed
+if ! command -v ffmpeg &>/dev/null; then
+    echo -e "${RED}Error: ffmpeg is not installed${NC}"
+    exit 1
+fi
+
+# Get input file
+INPUT_FILE="$1"
+
+# Check if file exists
+if [ ! -f "$INPUT_FILE" ]; then
+    echo -e "${RED}Error: File not found: $INPUT_FILE${NC}"
+    exit 1
+fi
+
+# Get quality (default to hq)
+QUALITY="${2:-hq}"
+
+# Set codec parameters based on quality
+case "$QUALITY" in
+    hq)
+        CODEC_OPTS="-c:v prores_ks -profile:v 3 -qscale:v 9 -vendor apl0 -pix_fmt yuv422p10le -c:a pcm_s16le"
+        SUFFIX="_prores_hq"
+        QUALITY_NAME="ProRes 422 HQ"
+        ;;
+    standard)
+        CODEC_OPTS="-c:v prores_ks -profile:v 2 -qscale:v 9 -vendor apl0 -pix_fmt yuv422p10le -c:a pcm_s16le"
+        SUFFIX="_prores"
+        QUALITY_NAME="ProRes 422"
+        ;;
+    lt)
+        CODEC_OPTS="-c:v prores_ks -profile:v 1 -qscale:v 9 -vendor apl0 -pix_fmt yuv422p10le -c:a pcm_s16le"
+        SUFFIX="_prores_lt"
+        QUALITY_NAME="ProRes 422 LT"
+        ;;
+    proxy)
+        CODEC_OPTS="-c:v prores_ks -profile:v 0 -qscale:v 9 -vendor apl0 -pix_fmt yuv422p10le -c:a pcm_s16le"
+        SUFFIX="_prores_proxy"
+        QUALITY_NAME="ProRes 422 Proxy"
+        ;;
+    4444)
+        CODEC_OPTS="-c:v prores_ks -profile:v 4 -qscale:v 9 -vendor apl0 -pix_fmt yuva444p10le -c:a pcm_s16le"
+        SUFFIX="_prores_4444"
+        QUALITY_NAME="ProRes 4444"
+        ;;
+    *)
+        echo -e "${RED}Error: Unknown quality '$QUALITY'${NC}"
+        echo ""
+        show_usage
+        exit 1
+        ;;
+esac
+
+# Get output filename
+BASENAME=$(basename "$INPUT_FILE")
+DIRNAME=$(dirname "$INPUT_FILE")
+FILENAME="${BASENAME%.*}"
+OUTPUT_FILE="$DIRNAME/${FILENAME}${SUFFIX}.mov"
+
+# Check if output already exists
+if [ -f "$OUTPUT_FILE" ]; then
+    echo -e "${YELLOW}Warning: Output file already exists:${NC}"
+    echo "  $OUTPUT_FILE"
+    echo ""
+    read -rp "Overwrite? (yes/no): " confirm
+    if [[ "${confirm,,}" != "yes" ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+fi
+
+# Show info
+echo -e "${CYAN}╔═══════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║     ProRes Video Converter            ║${NC}"
+echo -e "${CYAN}╚═══════════════════════════════════════╝${NC}"
+echo ""
+echo -e "${YELLOW}Input:${NC}    $INPUT_FILE"
+echo -e "${YELLOW}Output:${NC}   $OUTPUT_FILE"
+echo -e "${YELLOW}Quality:${NC}  $QUALITY_NAME"
+echo ""
+
+# Get input file info if ffprobe is available
+if command -v ffprobe &>/dev/null; then
+    DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$INPUT_FILE" 2>/dev/null | cut -d. -f1 || echo "?")
+    RESOLUTION=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$INPUT_FILE" 2>/dev/null || echo "?")
+    CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$INPUT_FILE" 2>/dev/null || echo "?")
+    SIZE=$(du -h "$INPUT_FILE" 2>/dev/null | cut -f1 || echo "?")
+    
+    echo -e "${CYAN}Input Info:${NC}"
+    echo -e "  Resolution: $RESOLUTION"
+    echo -e "  Codec:      $CODEC"
+    echo -e "  Duration:   ${DURATION}s"
+    echo -e "  Size:       $SIZE"
+    echo ""
+fi
+
+# Confirm
+echo -e "${GREEN}Press Enter to start conversion, or Ctrl+C to cancel...${NC}"
+read -r
+
+# Convert
+echo ""
+echo -e "${CYAN}Converting...${NC}"
+echo ""
+
+START_TIME=$(date +%s)
+
+if eval ffmpeg -i \""$INPUT_FILE"\" $CODEC_OPTS \""$OUTPUT_FILE"\" -hide_banner -stats 2>&1; then
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    OUTPUT_SIZE=$(du -h "$OUTPUT_FILE" 2>/dev/null | cut -f1 || echo "?")
+    
+    echo ""
+    echo -e "${GREEN}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║           Success!                    ║${NC}"
+    echo -e "${GREEN}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}Output:${NC}   $OUTPUT_FILE"
+    echo -e "${YELLOW}Size:${NC}     $OUTPUT_SIZE"
+    echo -e "${YELLOW}Time:${NC}     ${DURATION}s"
+    echo ""
+else
+    echo ""
+    echo -e "${RED}╔═══════════════════════════════════════╗${NC}"
+    echo -e "${RED}║           Failed!                     ║${NC}"
+    echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
+    echo ""
+    exit 1
+fi
